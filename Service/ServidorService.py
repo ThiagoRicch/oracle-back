@@ -1,9 +1,43 @@
-from Repository.ServidorRepository import ServidorRepository
 from Entity.Servidor import Servidor
+from Repository.ServidorRepository import ServidorRepository
+from Service.NotificationService import EventNotification, NotificationService
+
 
 class ServidorService:
     def __init__(self):
         self.repo = ServidorRepository()
+        self.notification_service = NotificationService()
+
+    @staticmethod
+    def _extract_first(result):
+        if isinstance(result, list) and result:
+            return result[0]
+        return result
+
+    @staticmethod
+    def _build_snapshot(before=None, after=None, context=None):
+        snapshot = {}
+        if before is not None:
+            snapshot["before"] = before
+        if after is not None:
+            snapshot["after"] = after
+        if context is not None:
+            snapshot["context"] = context
+        return snapshot or None
+
+    def _notify(self, event_type, description, servidor, snapshot=None):
+        if not servidor:
+            return
+
+        self.notification_service.send_event_notification(
+            EventNotification(
+                event_type=event_type,
+                description=description,
+                servidor=servidor,
+                timestamp=self.notification_service.now_utc(),
+                snapshot=snapshot,
+            )
+        )
 
     def listar(self):
         return self.repo.listar_servidores()
@@ -12,7 +46,7 @@ class ServidorService:
         return self.repo.listar_servidor_por_id(servidor_id)
 
     def criar(self, nome, pais, indice: int | None = None):
-        CAPACIDADE_80PRCT = int(Servidor.CAPACIDADE_TOTAL * 0.8)
+        capacidade_80prct = int(Servidor.CAPACIDADE_TOTAL * 0.8)
 
         existentes_nome = self.repo.buscar_servidor_por_nome(nome)
         if existentes_nome:
@@ -24,18 +58,42 @@ class ServidorService:
             if indice not in (0, 1):
                 return "Indice de cidade invalido. Use 0 ou 1."
 
-            # Frontend-selected city index should be respected directly.
-            return self.repo.criar_servidor(nome, pais, indice=indice)
+            created = self.repo.criar_servidor(nome, pais, indice=indice)
+            servidor = self._extract_first(created)
+            self._notify(
+                "Servidor Criado",
+                f"Servidor {nome} criado com sucesso em {servidor.get('cidade', pais)}.",
+                servidor,
+                self._build_snapshot(after=servidor),
+            )
+            return created
 
         if not servidores:
-            return self.repo.criar_servidor(nome, pais, indice=0)
-        
+            created = self.repo.criar_servidor(nome, pais, indice=0)
+            servidor = self._extract_first(created)
+            self._notify(
+                "Servidor Criado",
+                f"Servidor {nome} criado com sucesso em {servidor.get('cidade', pais)}.",
+                servidor,
+                self._build_snapshot(after=servidor),
+            )
+            return created
+
         if len(servidores) >= 2:
             return f"Limite de servidores atingido para {pais}."
-        
-        if servidores[0]["capacidade_atual"] < CAPACIDADE_80PRCT:
+
+        if servidores[0]["capacidade_atual"] < capacidade_80prct:
             return f"servidor em {pais} ainda não atingiu 80% de uso."
-        return self.repo.criar_servidor(nome, pais, indice=1)
+
+        created = self.repo.criar_servidor(nome, pais, indice=1)
+        servidor = self._extract_first(created)
+        self._notify(
+            "Servidor Criado",
+            f"Servidor {nome} criado com sucesso em {servidor.get('cidade', pais)}.",
+            servidor,
+            self._build_snapshot(after=servidor),
+        )
+        return created
 
     def listar_servidores_por_continente(self, continente):
         return self.repo.buscar_servidores_por_continente(continente)
@@ -44,15 +102,48 @@ class ServidorService:
         return self.repo.buscar_servidores_por_pais(pais)
 
     def atualizar(self, servidor_id, **kwargs):
-        novo_nome = kwargs.get('nome')
+        before = self.repo.listar_servidor_por_id(servidor_id)
+        novo_nome = kwargs.get("nome")
         if novo_nome and novo_nome.strip():
             existentes = self.repo.buscar_servidor_por_nome(novo_nome.strip())
-            if existentes and all(str(s.get('id')) != str(servidor_id) for s in existentes):
+            if existentes and all(str(s.get("id")) != str(servidor_id) for s in existentes):
                 return f"Já existe um servidor com o nome '{novo_nome.strip()}'."
-        return self.repo.atualizar_servidor(servidor_id, **kwargs)
+
+        updated = self.repo.atualizar_servidor(servidor_id, **kwargs)
+        servidor = self._extract_first(updated) or self.repo.listar_servidor_por_id(servidor_id)
+        self._notify(
+            "Servidor Editado",
+            f"Servidor {servidor.get('nome', servidor_id)} teve seus dados atualizados.",
+            servidor,
+            self._build_snapshot(before=before, after=servidor),
+        )
+        return updated
 
     def ativar_desativar(self, servidor_id, status):
-        return self.repo.ativar_desativar_servidor(servidor_id, status)
+        before = self.repo.listar_servidor_por_id(servidor_id)
+        updated = self.repo.ativar_desativar_servidor(servidor_id, status)
+        servidor = self._extract_first(updated) or self.repo.listar_servidor_por_id(servidor_id)
+        self._notify(
+            "Servidor Ativado" if status else "Servidor Desativado",
+            f"Servidor {servidor.get('nome', servidor_id)} foi {'ativado' if status else 'desativado'}.",
+            servidor,
+            self._build_snapshot(before=before, after=servidor),
+        )
+        return updated
+
+    def excluir(self, servidor_id):
+        servidor = self.repo.listar_servidor_por_id(servidor_id)
+        if not servidor:
+            return "Servidor não encontrado."
+
+        deleted = self.repo.excluir_servidor(servidor_id)
+        self._notify(
+            "Servidor Excluído",
+            f"Servidor {servidor.get('nome', servidor_id)} foi removido com seus arquivos vinculados.",
+            servidor,
+            self._build_snapshot(before=servidor, after=self._extract_first(deleted)),
+        )
+        return {"deleted": True, "servidor": servidor}
 
     def adicionar_capacidade(self, servidor_id, capacidade_a_adicionar):
         servidor = self.repo.listar_servidor_por_id(servidor_id)
@@ -61,8 +152,8 @@ class ServidorService:
         nova_capacidade = servidor["capacidade_atual"] + capacidade_a_adicionar
 
         if nova_capacidade > Servidor.CAPACIDADE_TOTAL:
-            return(f"Capacidade excedida. Capacidade máxima: {Servidor.CAPACIDADE_TOTAL}")
-            
+            return f"Capacidade excedida. Capacidade máxima: {Servidor.CAPACIDADE_TOTAL}"
+
         return self.repo.atualizar_servidor(servidor_id, capacidade_atual=nova_capacidade)
 
     def listar_arquivos(self, servidor_id):
@@ -91,6 +182,20 @@ class ServidorService:
             tamanho_gb=tamanho_gb,
         )
         self.repo.atualizar_servidor(servidor_id, capacidade_atual=nova_capacidade)
+
+        servidor_atualizado = self.repo.listar_servidor_por_id(servidor_id)
+        self._notify(
+            "Arquivo Adicionado",
+            f"Arquivo {titulo} foi adicionado ao servidor {servidor_atualizado.get('nome', servidor_id)}.",
+            servidor_atualizado,
+            self._build_snapshot(
+                after=self._extract_first(arquivo),
+                context={
+                    "capacidade_atual": nova_capacidade,
+                    "capacidade_total": capacidade_total,
+                },
+            ),
+        )
 
         return {
             "arquivo": arquivo,
@@ -134,6 +239,21 @@ class ServidorService:
         if delta != 0:
             self.repo.atualizar_servidor(servidor_id, capacidade_atual=nova_capacidade)
 
+        servidor_atualizado = self.repo.listar_servidor_por_id(servidor_id)
+        self._notify(
+            "Arquivo Alterado",
+            f"Arquivo {arquivo.get('titulo', arquivo_id)} foi alterado no servidor {servidor_atualizado.get('nome', servidor_id)}.",
+            servidor_atualizado,
+            self._build_snapshot(
+                before=arquivo,
+                after=self._extract_first(atualizado),
+                context={
+                    "capacidade_atual": nova_capacidade,
+                    "capacidade_total": capacidade_total,
+                },
+            ),
+        )
+
         return {
             "arquivo": atualizado,
             "capacidade_atual": nova_capacidade,
@@ -162,10 +282,22 @@ class ServidorService:
         self.repo.excluir_arquivo_servidor(arquivo_id)
         self.repo.atualizar_servidor(servidor_id, capacidade_atual=nova_capacidade)
 
+        servidor_atualizado = self.repo.listar_servidor_por_id(servidor_id)
+        self._notify(
+            "Arquivo Excluído",
+            f"Arquivo {arquivo.get('titulo', arquivo_id)} foi removido do servidor {servidor_atualizado.get('nome', servidor_id)}.",
+            servidor_atualizado,
+            self._build_snapshot(
+                before=arquivo,
+                context={
+                    "capacidade_atual": nova_capacidade,
+                    "capacidade_total": capacidade_total,
+                },
+            ),
+        )
+
         return {
             "deleted": True,
             "capacidade_atual": nova_capacidade,
             "capacidade_total": capacidade_total,
         }
-    
-    

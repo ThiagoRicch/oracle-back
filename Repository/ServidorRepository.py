@@ -1,9 +1,12 @@
-from supabase import create_client
-from Mapper.PaisMapper import get_latitude, get_longitude, get_continente, get_cidade, get_indice_cidade
-from Entity.Servidor import Servidor
-from dotenv import load_dotenv
-import os
 from datetime import datetime, timezone
+import os
+
+from dotenv import load_dotenv
+from supabase import create_client
+
+from Entity.Servidor import Servidor
+from Enum.Pais import PAISES
+from Mapper.PaisMapper import get_cidade, get_continente, get_indice_cidade, get_latitude, get_longitude
 
 
 load_dotenv()
@@ -13,41 +16,44 @@ supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 if not os.getenv("SUPABASE_URL") or not supabase_key:
     raise RuntimeError("Configure SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY no arquivo .env")
 
-supabase = create_client(
-    os.getenv("SUPABASE_URL"), 
-    supabase_key
-)
+supabase = create_client(os.getenv("SUPABASE_URL"), supabase_key)
+
 
 class ServidorRepository:
-
     @staticmethod
     def _normalize_country_name(pais: str) -> str:
-        raw = (pais or '').strip()
+        raw = (pais or "").strip()
 
         lowered = raw.lower()
         replacements = {
-            'á': 'a', 'à': 'a', 'ã': 'a', 'â': 'a',
-            'é': 'e', 'ê': 'e',
-            'í': 'i',
-            'ó': 'o', 'ô': 'o', 'õ': 'o',
-            'ú': 'u',
-            'ç': 'c',
+            "á": "a",
+            "à": "a",
+            "ã": "a",
+            "â": "a",
+            "é": "e",
+            "ê": "e",
+            "í": "i",
+            "ó": "o",
+            "ô": "o",
+            "õ": "o",
+            "ú": "u",
+            "ç": "c",
         }
         for source, target in replacements.items():
             lowered = lowered.replace(source, target)
 
         alias = {
-            'nova': 'Nova Zelândia',
-            'nova zelandia': 'Nova Zelândia',
-            'franca': 'França',
-            'italia': 'Itália',
-            'japao': 'Japão',
-            'canada': 'Canadá',
-            'mexico': 'México',
-            'panama': 'Panamá',
-            'colombia': 'Colômbia',
-            'africa do sul': 'África do Sul',
-            'australia': 'Austrália',
+            "nova": "Nova Zelândia",
+            "nova zelandia": "Nova Zelândia",
+            "franca": "França",
+            "italia": "Itália",
+            "japao": "Japão",
+            "canada": "Canadá",
+            "mexico": "México",
+            "panama": "Panamá",
+            "colombia": "Colômbia",
+            "africa do sul": "África do Sul",
+            "australia": "Austrália",
         }
         return alias.get(lowered, raw)
 
@@ -86,7 +92,7 @@ class ServidorRepository:
                 "status": status,
             }
             response = supabase.table("servidores").insert(fallback_data).execute()
-        return response.data
+        return [self._decorate_server(record) for record in response.data]
 
     def _normalize_records_country(self, records):
         normalized = []
@@ -95,11 +101,11 @@ class ServidorRepository:
                 record["pais"] = self._normalize_country_name(record["pais"])
             normalized.append(record)
         return normalized
-    
+
     def listar_servidores(self):
         response = supabase.table("servidores").select("*").execute()
-        return self._normalize_records_country(response.data)
-    
+        return [self._decorate_server(record) for record in self._normalize_records_country(response.data)]
+
     def listar_servidor_por_id(self, servidor_id):
         response = supabase.table("servidores").select("*").eq("id", servidor_id).execute()
         if not response.data:
@@ -107,8 +113,8 @@ class ServidorRepository:
         registro = response.data[0]
         if "pais" in registro:
             registro["pais"] = self._normalize_country_name(registro["pais"])
-        return registro
-    
+        return self._decorate_server(registro)
+
     def atualizar_servidor(self, servidor_id, **kwargs):
         data = {}
 
@@ -144,8 +150,8 @@ class ServidorRepository:
             data["cidade"] = get_cidade(normalized_pais, indice)
 
         response = supabase.table("servidores").update(data).eq("id", servidor_id).execute()
-        return response.data
-    
+        return [self._decorate_server(record) for record in response.data]
+
     def ativar_desativar_servidor(self, servidor_id, status):
         payload = {"status": status}
         if status:
@@ -157,24 +163,19 @@ class ServidorRepository:
             response = supabase.table("servidores").update(payload).eq("id", servidor_id).execute()
         except Exception:
             response = supabase.table("servidores").update({"status": status}).eq("id", servidor_id).execute()
-        return response.data
-    
+        return [self._decorate_server(record) for record in response.data]
+
     def buscar_servidores_por_pais(self, pais):
         pais = self._normalize_country_name(pais)
         response = supabase.table("servidores").select("*").eq("pais", pais).execute()
-        return self._normalize_records_country(response.data)
-    
+        return [self._decorate_server(record) for record in self._normalize_records_country(response.data)]
+
     def buscar_servidores_por_continente(self, continente):
         response = supabase.table("servidores").select("*").eq("continente", continente).execute()
-        return self._normalize_records_country(response.data)
+        return [self._decorate_server(record) for record in self._normalize_records_country(response.data)]
 
     def buscar_servidor_por_nome(self, nome: str):
-        response = (
-            supabase.table("servidores")
-            .select("id")
-            .ilike("nome", nome.strip())
-            .execute()
-        )
+        response = supabase.table("servidores").select("id").ilike("nome", nome.strip()).execute()
         return response.data or []
 
     def listar_arquivos_por_servidor(self, servidor_id):
@@ -218,4 +219,63 @@ class ServidorRepository:
     def excluir_arquivo_servidor(self, arquivo_id):
         response = supabase.table("servidores_arquivos").delete().eq("id", arquivo_id).execute()
         return response.data
-    
+
+    def excluir_servidor(self, servidor_id):
+        self.excluir_arquivos_por_servidor(servidor_id)
+        response = supabase.table("servidores").delete().eq("id", servidor_id).execute()
+        return [self._decorate_server(record) for record in response.data]
+
+    def excluir_arquivos_por_servidor(self, servidor_id):
+        response = supabase.table("servidores_arquivos").delete().eq("servidor_id", servidor_id).execute()
+        return response.data
+
+    def _decorate_server(self, registro):
+        if not isinstance(registro, dict):
+            return registro
+
+        registro["bandeira"] = self._get_country_flag(registro.get("pais"))
+        return registro
+
+    def _get_country_flag(self, pais_nome: str):
+        if not pais_nome:
+            return ""
+
+        normalized = self._normalize_country_name(pais_nome)
+        for paises in PAISES.values():
+            for pais in paises:
+                if self._normalize_country_name(pais.nome) == normalized:
+                    return self._country_name_to_flag(pais.nome)
+        return ""
+
+    @staticmethod
+    def _country_name_to_flag(pais_nome: str):
+        country_codes = {
+            "Brasil": "BR",
+            "Argentina": "AR",
+            "Colômbia": "CO",
+            "Peru": "PE",
+            "Chile": "CL",
+            "Estados Unidos": "US",
+            "Canadá": "CA",
+            "México": "MX",
+            "Costa Rica": "CR",
+            "Panamá": "PA",
+            "Alemanha": "DE",
+            "França": "FR",
+            "Reino Unido": "GB",
+            "Itália": "IT",
+            "Espanha": "ES",
+            "Portugal": "PT",
+            "China": "CN",
+            "Índia": "IN",
+            "Japão": "JP",
+            "Nigéria": "NG",
+            "Egito": "EG",
+            "África do Sul": "ZA",
+            "Austrália": "AU",
+            "Nova Zelândia": "NZ",
+        }
+        code = country_codes.get(pais_nome)
+        if not code:
+            return ""
+        return "".join(chr(127397 + ord(char)) for char in code)
