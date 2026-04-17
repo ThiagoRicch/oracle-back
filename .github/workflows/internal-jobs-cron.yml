@@ -1,0 +1,83 @@
+name: Internal Jobs Cron
+
+on:
+  schedule:
+    # GitHub Actions nao permite granularidade de 1 minuto.
+    # Aqui roda a cada 5 minutos.
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: internal-jobs-cron
+  cancel-in-progress: false
+
+jobs:
+  trigger-internal-jobs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Validate required secrets
+        env:
+          BACKEND_BASE_URL: ${{ secrets.BACKEND_BASE_URL }}
+          INTERNAL_CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BACKEND_BASE_URL:-}" ]; then
+            echo "Secret BACKEND_BASE_URL nao configurado"
+            exit 1
+          fi
+          if [ -z "${INTERNAL_CRON_SECRET:-}" ]; then
+            echo "Secret INTERNAL_CRON_SECRET nao configurado"
+            exit 1
+          fi
+
+      - name: Trigger daily and monthly jobs
+        env:
+          BACKEND_BASE_URL: ${{ secrets.BACKEND_BASE_URL }}
+          INTERNAL_CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          BASE_URL="${BACKEND_BASE_URL%/}"
+
+          call_job() {
+            local endpoint="$1"
+            echo "Chamando ${BASE_URL}${endpoint}"
+            curl --silent --show-error --fail \
+              --request POST \
+              --retry 3 \
+              --retry-delay 2 \
+              --header "Authorization: Bearer ${INTERNAL_CRON_SECRET}" \
+              "${BASE_URL}${endpoint}"
+            echo
+          }
+
+          call_job "/internal/jobs/daily"
+          call_job "/internal/jobs/monthly"
+
+      - name: Trigger weather job every 30 minutes
+        env:
+          BACKEND_BASE_URL: ${{ secrets.BACKEND_BASE_URL }}
+          INTERNAL_CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          minute="$(date -u +%M)"
+          minute=$((10#$minute))
+
+          if [ $((minute % 30)) -ne 0 ]; then
+            echo "Pulando weather job neste ciclo (minuto UTC atual: ${minute})"
+            exit 0
+          fi
+
+          BASE_URL="${BACKEND_BASE_URL%/}"
+          echo "Chamando ${BASE_URL}/internal/jobs/weather"
+          curl --silent --show-error --fail \
+            --request POST \
+            --retry 3 \
+            --retry-delay 2 \
+            --header "Authorization: Bearer ${INTERNAL_CRON_SECRET}" \
+            "${BASE_URL}/internal/jobs/weather"
+          echo
