@@ -26,7 +26,7 @@ class ReportService:
         self.energy_service = energy_service or EnergyMonitoringService()
         self.timezone_service = timezone_service or TimezoneService()
         self.weather_service = weather_service or WeatherService(self.timezone_service)
-        self.report_registry = {"daily": {}, "monthly": {}}
+        self.report_registry_fallback = {"daily": {}, "monthly": {}}
         self.weather_cache = {}
 
     def refresh_weather_status(self):
@@ -96,8 +96,9 @@ class ReportService:
                 if local_now.day != last_day:
                     continue
 
-            registry_key = f"{continente.value}:{local_now.date().isoformat()}"
-            if self.report_registry[report_type].get(registry_key):
+            report_date = local_now.date().isoformat()
+            registry_key = f"{continente.value}:{report_date}"
+            if self._report_already_sent(report_type, continente.value, report_date, registry_key):
                 continue
 
             body = self._build_report_body(
@@ -109,10 +110,14 @@ class ReportService:
             )
             title = "Relatório Diário" if report_type == "daily" else "Relatório Mensal"
             self.notification_service.send_report(f"{title} - {continente.value}", body)
-            self.report_registry[report_type][registry_key] = {
-                "sent_at": local_now.isoformat(),
-                "timezone": timezone_name,
-            }
+            self._mark_report_as_sent(
+                report_type,
+                continente.value,
+                report_date,
+                timezone_name,
+                local_now.isoformat(),
+                registry_key,
+            )
             sent.append(
                 {
                     "continente": continente.value,
@@ -122,6 +127,48 @@ class ReportService:
             )
 
         return sent
+
+    def _report_already_sent(self, report_type: str, continente: str, report_date: str, fallback_key: str):
+        try:
+            return self.repo.report_already_sent(report_type, continente, report_date)
+        except Exception:
+            return bool(self.report_registry_fallback[report_type].get(fallback_key))
+
+    def _mark_report_as_sent(
+        self,
+        report_type: str,
+        continente: str,
+        report_date: str,
+        timezone_name: str,
+        sent_at_iso: str,
+        fallback_key: str,
+    ):
+        try:
+            inserted = self.repo.mark_report_sent(
+                report_type,
+                continente,
+                report_date,
+                timezone_name,
+                sent_at_iso,
+            )
+            if not inserted:
+                logger.info(
+                    "Relatório já registrado para %s/%s em %s",
+                    report_type,
+                    continente,
+                    report_date,
+                )
+        except Exception:
+            self.report_registry_fallback[report_type][fallback_key] = {
+                "sent_at": sent_at_iso,
+                "timezone": timezone_name,
+            }
+            logger.warning(
+                "Fallback de idempotência em memória ativado para %s/%s em %s",
+                report_type,
+                continente,
+                report_date,
+            )
 
     def _build_report_body(self, report_type: str, continente: str, servers: list[dict], weather_map: dict, local_now: datetime):
         lines = [

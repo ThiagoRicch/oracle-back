@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 import os
+import logging
 
 from dotenv import load_dotenv
 from supabase import create_client
@@ -17,6 +18,7 @@ if not os.getenv("SUPABASE_URL") or not supabase_key:
     raise RuntimeError("Configure SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY no arquivo .env")
 
 supabase = create_client(os.getenv("SUPABASE_URL"), supabase_key)
+logger = logging.getLogger(__name__)
 
 
 class ServidorRepository:
@@ -228,6 +230,42 @@ class ServidorRepository:
     def excluir_arquivos_por_servidor(self, servidor_id):
         response = supabase.table("servidores_arquivos").delete().eq("servidor_id", servidor_id).execute()
         return response.data
+
+    def report_already_sent(self, report_type: str, continente: str, report_date: str):
+        response = (
+            supabase.table("report_dispatch_log")
+            .select("id")
+            .eq("report_type", report_type)
+            .eq("continente", continente)
+            .eq("report_date", report_date)
+            .limit(1)
+            .execute()
+        )
+        return bool(response.data)
+
+    def mark_report_sent(
+        self,
+        report_type: str,
+        continente: str,
+        report_date: str,
+        timezone_name: str,
+        sent_at_iso: str,
+    ):
+        payload = {
+            "report_type": report_type,
+            "continente": continente,
+            "report_date": report_date,
+            "timezone": timezone_name,
+            "sent_at": sent_at_iso,
+        }
+        try:
+            supabase.table("report_dispatch_log").insert(payload).execute()
+            return True
+        except Exception as exc:
+            if "duplicate key" in str(exc).lower() or "23505" in str(exc):
+                return False
+            logger.exception("Falha ao registrar envio de relatório no Supabase")
+            raise
 
     def _decorate_server(self, registro):
         if not isinstance(registro, dict):
