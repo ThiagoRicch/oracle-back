@@ -167,8 +167,17 @@ class ReportService:
 
         sent = []
 
+        servers = self.repo.listar_servidores()
+        countries_with_servers = {
+            (servidor.get("pais") or "").strip()
+            for servidor in servers
+            if (servidor.get("pais") or "").strip()
+        }
+
         for continente, paises in PAISES.items():
             for pais in paises:
+                if pais.nome not in countries_with_servers:
+                    continue
                 if not pais.localizacoes:
                     continue
 
