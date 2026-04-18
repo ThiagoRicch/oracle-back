@@ -57,6 +57,7 @@ jobs:
 
           call_job "/internal/jobs/daily"
           call_job "/internal/jobs/monthly"
+          call_job "/internal/jobs/solar"
 
       - name: Trigger weather job every 30 minutes
         env:

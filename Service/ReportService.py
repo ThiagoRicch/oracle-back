@@ -205,7 +205,7 @@ class ReportService:
                     )
                 )
 
-                if local_now.hour != decision_hour or abs(local_now.minute - decision_minute) > 2:
+                if local_now.hour != decision_hour or abs(local_now.minute - decision_minute) > 14:
                     continue
 
                 report_date = local_now.date().isoformat()
