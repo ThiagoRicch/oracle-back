@@ -114,9 +114,8 @@ class NotificationService:
         subject = f"[{notification.event_type}] {servidor.get('nome', 'Servidor')}"
         self._deliver(subject, body_text, body_html)
 
-    def send_report(self, subject: str, body: str):
-        html_body = self._build_simple_report_html(subject, body)
-        self._deliver(subject, body, html_body)
+    def send_report(self, subject: str, html_body: str, plain_body: str = ""):
+        self._deliver(subject, plain_body or subject, html_body)
 
     def _deliver(self, subject: str, body: str, html_body: str | None = None):
         if not self.recipients or not self.smtp_host:
