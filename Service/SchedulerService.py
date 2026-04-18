@@ -51,6 +51,13 @@ class SchedulerService:
             replace_existing=True,
             max_instances=1,
         )
+        self.scheduler.add_job(
+            self.report_service.send_solar_decision_reports,
+            IntervalTrigger(minutes=1),
+            id="solar-decision-coordinator",
+            replace_existing=True,
+            max_instances=1,
+        )
         self.scheduler.start()
         logger.info("Scheduler interno iniciado")
 

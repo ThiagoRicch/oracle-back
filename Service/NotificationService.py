@@ -44,6 +44,51 @@ class NotificationService:
         self.oracle_logo_path = Path(os.getenv("ORACLE_LOGO_PATH", "assets/oracle.png"))
         self.oracle_logo_cid = "oracle_logo"
 
+    @staticmethod
+    def _normalize_iso2(flag_value: object) -> str:
+        if isinstance(flag_value, str):
+            value = flag_value.strip().upper()
+            if len(value) == 2 and value.isalpha():
+                return value
+        return ""
+
+    def _render_flag_cell_html(self, servidor: dict) -> str:
+        raw_flag = servidor.get("bandeira", "")
+        iso2 = self._normalize_iso2(raw_flag)
+        if not iso2:
+            return html.escape(str(raw_flag or "-"))
+
+        flag_url = f"https://flagcdn.com/w40/{iso2.lower()}.png"
+        return (
+            f'<span style="display:inline-block;vertical-align:middle;">'
+            f'<img src="{flag_url}" alt="{iso2}" width="24" height="16" '
+            f'style="display:inline-block;vertical-align:middle;width:24px;height:16px;border:1px solid #d1d5db;border-radius:2px;" />'
+            f'<span style="display:inline-block;vertical-align:middle;margin-left:8px;color:#374151;">{iso2}</span>'
+            f'</span>'
+        )
+
+    @staticmethod
+    def _normalize_after_snapshot(data: dict | None) -> dict:
+        if not isinstance(data, dict):
+            return {}
+
+        normalized = dict(data)
+
+        if "updated_at" in normalized and "update_at" not in normalized:
+            normalized["update_at"] = normalized.pop("updated_at")
+
+        if "create_at" in normalized:
+            if "update_at" not in normalized:
+                normalized["update_at"] = normalized.get("create_at")
+            normalized.pop("create_at", None)
+
+        if "created_at" in normalized:
+            if "update_at" not in normalized:
+                normalized["update_at"] = normalized.get("created_at")
+            normalized.pop("created_at", None)
+
+        return normalized
+
     def send_event_notification(self, notification: EventNotification):
         servidor = notification.servidor or {}
         timezone_name = self.timezone_service.resolve_timezone_name(
@@ -76,10 +121,10 @@ class NotificationService:
     def _deliver(self, subject: str, body: str, html_body: str | None = None):
         if not self.recipients or not self.smtp_host:
             logger.warning(
-                "Email não enviado. Configure SMTP_HOST e NOTIFICATION_EMAIL_TO. Assunto: %s",
+                "Email nao enviado. Configure SMTP_HOST e NOTIFICATION_EMAIL_TO. Assunto: %s",
                 subject,
             )
-            logger.info("Corpo do email não enviado:\n%s", body)
+            logger.info("Corpo do email nao enviado:\n%s", body)
             return False
 
         message = EmailMessage()
@@ -124,7 +169,7 @@ class NotificationService:
         lines = [
             f"Tipo do evento: {notification.event_type}",
             f"Servidor: {servidor.get('nome', 'N/A')}",
-            f"País: {servidor.get('pais', 'N/A')}",
+            f"Pais: {servidor.get('pais', 'N/A')}",
             f"Continente: {servidor.get('continente', 'N/A')}",
             f"Bandeira: {servidor.get('bandeira', '-')}",
             f"Timestamp: {local_timestamp.isoformat()} ({timezone_name})",
@@ -138,13 +183,14 @@ class NotificationService:
         context = snapshot.get("context") if isinstance(snapshot, dict) else None
 
         if before:
-            lines.append("\nSnapshot (antes):")
+            lines.append("\nAntes:")
             for key, value in before.items():
                 lines.append(f"- {key}: {value}")
 
         if after:
-            lines.append("\nSnapshot (depois):")
-            for key, value in after.items():
+            normalized_after = self._normalize_after_snapshot(after)
+            lines.append("\nDepois:")
+            for key, value in normalized_after.items():
                 lines.append(f"- {key}: {value}")
 
         if context:
@@ -155,16 +201,17 @@ class NotificationService:
         return "\n".join(lines)
 
     def _build_event_html(self, notification: EventNotification, servidor: dict, local_timestamp: datetime, timezone_name: str):
+        bandeira_html = self._render_flag_cell_html(servidor)
         event_rows = [
             ("Tipo do evento", notification.event_type),
             ("Servidor", servidor.get("nome", "N/A")),
-            ("País", servidor.get("pais", "N/A")),
+            ("Pais", servidor.get("pais", "N/A")),
             ("Continente", servidor.get("continente", "N/A")),
-            ("Bandeira", servidor.get("bandeira", "-")),
+            ("Bandeira", bandeira_html),
             ("Timestamp", f"{local_timestamp.isoformat()} ({timezone_name})"),
-            ("Descrição", notification.description),
+            ("Descricao", notification.description),
         ]
-        event_table = self._render_table_rows(event_rows)
+        event_table = self._render_table_rows(event_rows, allow_html_labels={"Bandeira"})
 
         snapshot = notification.snapshot if isinstance(notification.snapshot, dict) else {}
         before_table = ""
@@ -172,9 +219,10 @@ class NotificationService:
         context_table = ""
 
         if snapshot.get("before") and isinstance(snapshot.get("before"), dict):
-            before_table = self._render_snapshot_section("Snapshot - Antes", snapshot.get("before"))
+            before_table = self._render_snapshot_section("Antes", snapshot.get("before"))
         if snapshot.get("after") and isinstance(snapshot.get("after"), dict):
-            after_table = self._render_snapshot_section("Snapshot - Depois", snapshot.get("after"))
+            after_data = self._normalize_after_snapshot(snapshot.get("after"))
+            after_table = self._render_snapshot_section("Depois", after_data)
         if snapshot.get("context") and isinstance(snapshot.get("context"), dict):
             context_table = self._render_snapshot_section("Contexto", snapshot.get("context"))
 
@@ -190,12 +238,12 @@ class NotificationService:
           <table role=\"presentation\" width=\"700\" cellspacing=\"0\" cellpadding=\"0\" style=\"max-width:700px;background:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #e5e7eb;\">
             <tr>
               <td style=\"background:#c74634;padding:20px 24px;\">
-                <img src=\"{logo_source}\" alt=\"Oracle\" height=\"28\" style=\"display:block;height:28px;max-width:180px;\" />
+                <img src=\"{logo_source}\" alt=\"Oracle\" height=\"100\" style=\"display:block;height:100px;width:auto;max-width:300px;\" />
               </td>
             </tr>
             <tr>
               <td style=\"padding:24px;\">
-                <h2 style=\"margin:0 0 16px 0;font-size:20px;color:#111827;\">Notificação de Evento</h2>
+                <h2 style=\"margin:0 0 16px 0;font-size:20px;color:#111827;\">Notificacao de Evento</h2>
                 <table role=\"presentation\" width=\"100%\" cellspacing=\"0\" cellpadding=\"0\" style=\"border-collapse:collapse;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;\">
                   <tbody>
                     {event_table}
@@ -215,15 +263,17 @@ class NotificationService:
 """
 
     @staticmethod
-    def _render_table_rows(rows: list[tuple[str, object]]):
+    def _render_table_rows(rows: list[tuple[str, object]], allow_html_labels: set[str] | None = None):
+        allow_html_labels = allow_html_labels or set()
         html_rows = []
         for idx, (label, value) in enumerate(rows):
             background = "#ffffff" if idx % 2 == 0 else "#f9fafb"
+            value_html = str(value) if str(label) in allow_html_labels else html.escape(str(value))
             html_rows.append(
                 f"""
                 <tr style=\"background:{background};\">
                   <td style=\"padding:12px 14px;border-bottom:1px solid #e5e7eb;width:220px;font-weight:bold;color:#374151;\">{html.escape(str(label))}</td>
-                  <td style=\"padding:12px 14px;border-bottom:1px solid #e5e7eb;color:#111827;\">{html.escape(str(value))}</td>
+                  <td style=\"padding:12px 14px;border-bottom:1px solid #e5e7eb;color:#111827;\">{value_html}</td>
                 </tr>
                 """
             )
@@ -254,7 +304,7 @@ class NotificationService:
           <table role=\"presentation\" width=\"700\" cellspacing=\"0\" cellpadding=\"0\" style=\"max-width:700px;background:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #e5e7eb;\">
             <tr>
               <td style=\"background:#c74634;padding:20px 24px;\">
-                <img src=\"{logo_source}\" alt=\"Oracle\" height=\"28\" style=\"display:block;height:28px;max-width:180px;\" />
+                <img src=\"{logo_source}\" alt=\"Oracle\" height=\"100\" style=\"display:block;height:100px;width:auto;max-width:300px;\" />
               </td>
             </tr>
             <tr>

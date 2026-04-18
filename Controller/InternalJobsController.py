@@ -68,3 +68,18 @@ def run_weather_job(
         "executed_at_utc": datetime.now(timezone.utc).isoformat(),
         "servers_updated": len(weather),
     }
+
+
+@router.post("/solar")
+def run_solar_job(
+    authorization: str | None = Header(default=None),
+    x_internal_secret: str | None = Header(default=None),
+):
+    _validate_internal_secret(authorization, x_internal_secret)
+    sent = scheduler_service.report_service.send_solar_decision_reports()
+    return {
+        "job": "solar",
+        "executed_at_utc": datetime.now(timezone.utc).isoformat(),
+        "decisions_sent": sent,
+        "count": len(sent),
+    }

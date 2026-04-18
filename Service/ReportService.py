@@ -1,8 +1,10 @@
 import logging
+import os
 from calendar import monthrange
 from datetime import datetime
 
 from Enum.Continentes import Continentes
+from Enum.Pais import PAISES
 from Service.EnergyMonitoringService import EnergyMonitoringService
 from Service.NotificationService import NotificationService
 from Service.TimezoneService import TimezoneService
@@ -26,7 +28,7 @@ class ReportService:
         self.energy_service = energy_service or EnergyMonitoringService()
         self.timezone_service = timezone_service or TimezoneService()
         self.weather_service = weather_service or WeatherService(self.timezone_service)
-        self.report_registry_fallback = {"daily": {}, "monthly": {}}
+        self.report_registry_fallback = {"daily": {}, "monthly": {}, "solar": {}}
         self.weather_cache = {}
 
     def refresh_weather_status(self):
@@ -58,6 +60,9 @@ class ReportService:
 
     def send_monthly_reports(self):
         return self._send_reports(report_type="monthly")
+
+    def send_solar_decision_reports(self):
+        return self._send_solar_decisions()
 
     def _send_reports(self, report_type: str):
         servers = self.repo.listar_servidores()
@@ -125,6 +130,99 @@ class ReportService:
                     "sent_at": local_now.isoformat(),
                 }
             )
+
+        return sent
+
+    def _send_solar_decisions(self):
+        decision_hour = int(os.getenv("SOLAR_DECISION_HOUR", "6"))
+        decision_minute = int(os.getenv("SOLAR_DECISION_MINUTE", "0"))
+        decision_hour = max(0, min(23, decision_hour))
+        decision_minute = max(0, min(59, decision_minute))
+
+        sent = []
+
+        for continente, paises in PAISES.items():
+            for pais in paises:
+                if not pais.localizacoes:
+                    continue
+
+                location = pais.localizacoes[0]
+                cidade = location.get("cidade")
+                latitude = location.get("latitude")
+                longitude = location.get("longitude")
+
+                timezone_name = self.timezone_service.resolve_timezone_name(
+                    latitude,
+                    longitude,
+                    continente.value,
+                    pais.nome,
+                    cidade,
+                )
+                local_now = datetime.now(
+                    self.timezone_service.get_timezone(
+                        latitude,
+                        longitude,
+                        continente.value,
+                        pais.nome,
+                        cidade,
+                    )
+                )
+
+                if local_now.hour != decision_hour or local_now.minute != decision_minute:
+                    continue
+
+                report_date = local_now.date().isoformat()
+                country_key = f"PAIS:{pais.nome}"
+                fallback_key = f"solar:{country_key}:{report_date}"
+                if self._report_already_sent("solar", country_key, report_date, fallback_key):
+                    continue
+
+                try:
+                    weather = self.weather_service.get_weather_snapshot(
+                        latitude,
+                        longitude,
+                        continente.value,
+                    )
+                except Exception as exc:
+                    logger.warning("Falha ao consultar clima para decisao solar em %s: %s", pais.nome, exc)
+                    weather = {
+                        "solar_active": False,
+                        "is_sunny": False,
+                        "weather_code": None,
+                        "reason": "Falha ao consultar API de clima",
+                    }
+
+                body = self._build_solar_decision_body(
+                    continente.value,
+                    pais.nome,
+                    local_now,
+                    timezone_name,
+                    weather,
+                    decision_hour,
+                    decision_minute,
+                )
+                self.notification_service.send_report(
+                    f"Decisao Energetica Solar - {pais.nome}",
+                    body,
+                )
+                self._mark_report_as_sent(
+                    "solar",
+                    country_key,
+                    report_date,
+                    timezone_name,
+                    local_now.isoformat(),
+                    fallback_key,
+                )
+
+                sent.append(
+                    {
+                        "continente": continente.value,
+                        "pais": pais.nome,
+                        "timezone": timezone_name,
+                        "sent_at": local_now.isoformat(),
+                        "solar_active": bool(weather.get("solar_active")),
+                    }
+                )
 
         return sent
 
@@ -203,5 +301,47 @@ class ReportService:
                     "",
                 ]
             )
+
+        return "\n".join(lines)
+
+    @staticmethod
+    def _build_solar_decision_body(
+        continente: str,
+        pais: str,
+        local_now: datetime,
+        timezone_name: str,
+        weather: dict,
+        decision_hour: int,
+        decision_minute: int,
+    ):
+        solar_active = bool(weather.get("solar_active"))
+        is_sunny = bool(weather.get("is_sunny"))
+        weather_code = weather.get("weather_code")
+        reason = weather.get("reason", "Motivo não informado")
+
+        schedule_label = f"{decision_hour:02d}:{decision_minute:02d}"
+
+        if solar_active:
+            decision_text = "Será ativado o uso de energia solar."
+        else:
+            decision_text = "Não será ativado o uso de energia solar; energia elétrica será usada como padrão."
+
+        if is_sunny:
+            condition_text = "Condição climática atual: ensolarado."
+        else:
+            condition_text = "Condição climática atual: nublado/chuvoso ou sem incidência solar suficiente."
+
+        lines = [
+            "Relatório Técnico - Decisão Diária de Energia Solar",
+            f"País: {pais}",
+            f"Continente: {continente}",
+            f"Horário local de decisão: {schedule_label}",
+            f"Horário local da análise: {local_now.isoformat()} ({timezone_name})",
+            condition_text,
+            f"Código meteorológico: {weather_code}",
+            f"Motivo técnico: {reason}",
+            "",
+            f"{schedule_label} da manhã em {pais}: {decision_text}",
+        ]
 
         return "\n".join(lines)
