@@ -29,13 +29,14 @@ class ReportService:
         self.weather_service = weather_service or WeatherService(self.timezone_service)
         self.report_registry_fallback = {"daily": {}, "monthly": {}, "solar": {}}
         self.weather_cache = {}
+        self.country_weather_cache = {}
 
     def refresh_weather_status(self):
         servers = self.repo.listar_servidores()
-        snapshots = {}
+        server_snapshots = {}
         for servidor in servers:
             try:
-                snapshots[str(servidor.get("id"))] = self.weather_service.get_weather_snapshot(
+                server_snapshots[str(servidor.get("id"))] = self.weather_service.get_weather_snapshot(
                     servidor.get("latitude"),
                     servidor.get("longitude"),
                     servidor.get("continente"),
@@ -46,13 +47,35 @@ class ReportService:
                     servidor.get("nome"),
                     exc,
                 )
-                snapshots[str(servidor.get("id"))] = {
+                server_snapshots[str(servidor.get("id"))] = {
                     "solar_active": False,
                     "reason": "Falha ao consultar API de clima",
                     "checked_at": datetime.utcnow().isoformat(),
                 }
-            self.weather_cache = snapshots
-        return snapshots
+        self.weather_cache = server_snapshots
+
+        country_snapshots = {}
+        for continente, paises in PAISES.items():
+            for pais in paises:
+                if not pais.localizacoes:
+                    continue
+                location = pais.localizacoes[0]
+                try:
+                    country_snapshots[pais.nome] = self.weather_service.get_weather_snapshot(
+                        location.get("latitude"),
+                        location.get("longitude"),
+                        continente.value,
+                    )
+                except Exception as exc:
+                    logger.warning("Falha ao consultar clima de %s: %s", pais.nome, exc)
+                    country_snapshots[pais.nome] = {
+                        "solar_active": False,
+                        "reason": "Falha ao consultar API de clima",
+                        "checked_at": datetime.utcnow().isoformat(),
+                    }
+        self.country_weather_cache = country_snapshots
+
+        return {"servers": server_snapshots, "countries": country_snapshots}
 
     def send_daily_reports(self):
         return self._send_reports(report_type="daily")
@@ -96,7 +119,7 @@ class ReportService:
                     base_server.get("cidade"),
                 )
             )
-            if local_now.hour != 23 or local_now.minute != 50:
+            if local_now.hour != 23 or not (48 <= local_now.minute <= 52):
                 continue
 
             if report_type == "monthly":
@@ -171,7 +194,7 @@ class ReportService:
                     )
                 )
 
-                if local_now.hour != decision_hour or local_now.minute != decision_minute:
+                if local_now.hour != decision_hour or abs(local_now.minute - decision_minute) > 2:
                     continue
 
                 report_date = local_now.date().isoformat()

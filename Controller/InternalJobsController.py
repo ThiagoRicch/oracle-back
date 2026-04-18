@@ -62,11 +62,12 @@ def run_weather_job(
     x_internal_secret: str | None = Header(default=None),
 ):
     _validate_internal_secret(authorization, x_internal_secret)
-    weather = scheduler_service.report_service.refresh_weather_status()
+    result = scheduler_service.report_service.refresh_weather_status()
     return {
         "job": "weather",
         "executed_at_utc": datetime.now(timezone.utc).isoformat(),
-        "servers_updated": len(weather),
+        "servers_updated": len(result.get("servers", {})),
+        "countries_updated": len(result.get("countries", {})),
     }
 
 
