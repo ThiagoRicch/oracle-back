@@ -3,7 +3,6 @@ import os
 from calendar import monthrange
 from datetime import datetime
 
-from Enum.Continentes import Continentes
 from Enum.Pais import PAISES
 from Service.EnergyMonitoringService import EnergyMonitoringService
 from Service.NotificationService import NotificationService
@@ -69,18 +68,22 @@ class ReportService:
         weather_map = self.weather_cache or self.refresh_weather_status()
         sent = []
 
-        for continente in Continentes:
-            servers_by_continent = [
-                servidor for servidor in servers if servidor.get("continente") == continente.value
-            ]
-            if not servers_by_continent:
+        servers_by_country: dict[str, list[dict]] = {}
+        for servidor in servers:
+            pais = (servidor.get("pais") or "").strip()
+            if not pais:
+                continue
+            servers_by_country.setdefault(pais, []).append(servidor)
+
+        for pais, servers_by_country_group in servers_by_country.items():
+            if not servers_by_country_group:
                 continue
 
-            base_server = servers_by_continent[0]
+            base_server = servers_by_country_group[0]
             timezone_name = self.timezone_service.resolve_timezone_name(
                 base_server.get("latitude"),
                 base_server.get("longitude"),
-                continente.value,
+                base_server.get("continente"),
                 base_server.get("pais"),
                 base_server.get("cidade"),
             )
@@ -88,7 +91,7 @@ class ReportService:
                 self.timezone_service.get_timezone(
                     base_server.get("latitude"),
                     base_server.get("longitude"),
-                    continente.value,
+                    base_server.get("continente"),
                     base_server.get("pais"),
                     base_server.get("cidade"),
                 )
@@ -102,22 +105,22 @@ class ReportService:
                     continue
 
             report_date = local_now.date().isoformat()
-            registry_key = f"{continente.value}:{report_date}"
-            if self._report_already_sent(report_type, continente.value, report_date, registry_key):
+            registry_key = f"{pais}:{report_date}"
+            if self._report_already_sent(report_type, pais, report_date, registry_key):
                 continue
 
             body = self._build_report_body(
                 report_type,
-                continente.value,
-                servers_by_continent,
+                pais,
+                servers_by_country_group,
                 weather_map,
                 local_now,
             )
             title = "Relatório Diário" if report_type == "daily" else "Relatório Mensal"
-            self.notification_service.send_report(f"{title} - {continente.value}", body)
+            self.notification_service.send_report(f"{title} - {pais}", body)
             self._mark_report_as_sent(
                 report_type,
-                continente.value,
+                pais,
                 report_date,
                 timezone_name,
                 local_now.isoformat(),
@@ -125,7 +128,7 @@ class ReportService:
             )
             sent.append(
                 {
-                    "continente": continente.value,
+                    "pais": pais,
                     "timezone": timezone_name,
                     "sent_at": local_now.isoformat(),
                 }
@@ -268,12 +271,18 @@ class ReportService:
                 report_date,
             )
 
-    def _build_report_body(self, report_type: str, continente: str, servers: list[dict], weather_map: dict, local_now: datetime):
+    def _build_report_body(self, report_type: str, pais: str, servers: list[dict], weather_map: dict, local_now: datetime):
         lines = [
-            f"📊 {'Relatório Diário' if report_type == 'daily' else 'Relatório Mensal'} - {continente}",
+            f"📊 {'Relatório Diário' if report_type == 'daily' else 'Relatório Mensal'} - {pais}",
             f"Gerado em: {local_now.isoformat()}",
             "",
         ]
+
+        total_kwh = 0.0
+        total_local_cost = 0.0
+        total_usd_cost = 0.0
+        currency_symbol = "$"
+        currency_code = "USD"
 
         for servidor in servers:
             metrics = (
@@ -281,6 +290,12 @@ class ReportService:
                 if report_type == "daily"
                 else self.energy_service.build_monthly_metrics(servidor, local_now.date())
             )
+            total_kwh += metrics["consumption_kwh"]
+            total_local_cost += metrics["local_cost"]
+            total_usd_cost += metrics["usd_cost"]
+            currency_symbol = metrics["currency_symbol"]
+            currency_code = metrics["currency_code"]
+
             weather = weather_map.get(str(servidor.get("id")), {})
             lines.extend(
                 [
@@ -301,6 +316,15 @@ class ReportService:
                     "",
                 ]
             )
+
+        lines.extend(
+            [
+                "📌 RESUMO DO PAÍS",
+                f"⚡ Consumo total do país: {round(total_kwh, 2)} kWh",
+                f"💰 Custo total local: {currency_symbol}{round(total_local_cost, 2)} {currency_code}",
+                f"💵 Custo total em USD: ${round(total_usd_cost, 2)} USD",
+            ]
+        )
 
         return "\n".join(lines)
 

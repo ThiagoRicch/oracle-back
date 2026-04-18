@@ -1,5 +1,6 @@
 import hashlib
 import math
+import random
 from calendar import monthrange
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -44,34 +45,33 @@ DEFAULT_PROFILE = CurrencyProfile("USD", "$", 0.18, 1.0)
 
 
 class EnergyMonitoringService:
-    def _daily_power_watts(self, servidor_id: str, current_date: date) -> int:
+    def _daily_consumption_kwh(self, servidor_id: str, current_date: date) -> float:
+        # Simulacao de consumo diario com variacao por dia e servidor.
         seed = f"{servidor_id}:{current_date.isoformat()}"
         digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()
-        value = int(digest[:8], 16)
-        return 30 + (value % 271)
+        seed_value = int(digest[:16], 16)
+        rng = random.Random(seed_value)
+        return float(rng.randint(80, 180))
 
-    def _monthly_power_samples(self, servidor_id: str, reference_date: date):
+    def _monthly_consumption_samples(self, servidor_id: str, reference_date: date):
         _, days_in_month = monthrange(reference_date.year, reference_date.month)
         first_day = reference_date.replace(day=1)
         for offset in range(days_in_month):
             current = first_day + timedelta(days=offset)
-            yield self._daily_power_watts(servidor_id, current)
-
-    @staticmethod
-    def _watts_to_daily_kwh(power_watts: int) -> float:
-        return round((power_watts * 24) / 1000, 2)
+            yield self._daily_consumption_kwh(servidor_id, current)
 
     def build_daily_metrics(self, servidor: dict, reference_date: date | None = None):
         current_date = reference_date or datetime.utcnow().date()
-        power_watts = self._daily_power_watts(str(servidor.get("id")), current_date)
-        consumption_kwh = self._watts_to_daily_kwh(power_watts)
+        consumption_kwh = self._daily_consumption_kwh(str(servidor.get("id")), current_date)
+        power_watts = math.floor((consumption_kwh * 1000) / 24)
         return self._build_costs(servidor, consumption_kwh, power_watts, current_date)
 
     def build_monthly_metrics(self, servidor: dict, reference_date: date | None = None):
         current_date = reference_date or datetime.utcnow().date()
-        samples = list(self._monthly_power_samples(str(servidor.get("id")), current_date))
-        avg_power_watts = math.floor(sum(samples) / len(samples)) if samples else 0
-        consumption_kwh = round(sum(self._watts_to_daily_kwh(sample) for sample in samples), 2)
+        samples = list(self._monthly_consumption_samples(str(servidor.get("id")), current_date))
+        consumption_kwh = round(sum(samples), 2)
+        avg_daily_kwh = (consumption_kwh / len(samples)) if samples else 0
+        avg_power_watts = math.floor((avg_daily_kwh * 1000) / 24) if samples else 0
         return self._build_costs(servidor, consumption_kwh, avg_power_watts, current_date)
 
     def _build_costs(self, servidor: dict, consumption_kwh: float, power_watts: int, reference_date: date):
