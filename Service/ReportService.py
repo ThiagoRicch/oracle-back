@@ -173,7 +173,7 @@ class ReportService:
         countries_with_servers = {
             (servidor.get("pais") or "").strip()
             for servidor in servers
-            if (servidor.get("pais") or "").strip()
+            if (servidor.get("pais") or "").strip() and servidor.get("status") is True
         }
 
         for continente, paises in PAISES.items():
