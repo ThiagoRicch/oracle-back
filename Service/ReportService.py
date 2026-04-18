@@ -98,6 +98,8 @@ class ReportService:
             pais = (servidor.get("pais") or "").strip()
             if not pais:
                 continue
+            if servidor.get("status") is not True:
+                continue
             servers_by_country.setdefault(pais, []).append(servidor)
 
         for pais, servers_by_country_group in servers_by_country.items():
