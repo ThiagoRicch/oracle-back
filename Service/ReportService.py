@@ -88,7 +88,9 @@ class ReportService:
 
     def _send_reports(self, report_type: str):
         servers = self.repo.listar_servidores()
-        weather_map = self.weather_cache or self.refresh_weather_status()
+        if not self.weather_cache:
+            self.refresh_weather_status()
+        weather_map = self.weather_cache
         sent = []
 
         servers_by_country: dict[str, list[dict]] = {}
@@ -119,7 +121,7 @@ class ReportService:
                     base_server.get("cidade"),
                 )
             )
-            if local_now.hour != 23 or not (48 <= local_now.minute <= 52):
+            if local_now.hour != 23 or not (44 <= local_now.minute <= 59):
                 continue
 
             if report_type == "monthly":
