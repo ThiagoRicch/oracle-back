@@ -29,7 +29,7 @@ app.include_router(servidor_router)
 app.include_router(geografia_router)
 app.include_router(internal_jobs_router)
 
-frontend_url = os.getenv("FRONTEND_URL", "https://oracle-pim.vercel.app").rstrip("/")
+frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173").rstrip("/")
 allow_origins = [frontend_url]
 
 app.add_middleware(
