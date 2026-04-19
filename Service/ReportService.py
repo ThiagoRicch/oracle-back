@@ -2,7 +2,7 @@ import html as html_module
 import logging
 import os
 from calendar import monthrange
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from Enum.Pais import PAISES
 from Service.EnergyMonitoringService import EnergyMonitoringService
@@ -132,16 +132,32 @@ class ReportService:
                 )
             )
 
-            # 30-minute window: 23:30 – 23:59 (absorbs GitHub Actions delay + cold start)
-            if local_now.hour != 23 or local_now.minute < 30:
+            # Janela ampla ancorada em 23:50 local: 23:20 ate 00:10
+            # (50 minutos totais — absorve throttling do GitHub Actions e
+            # cold start do Render). Como a janela cruza a meia-noite,
+            # calculamos o target_time correto dependendo da hora local:
+            #   - hora >= 12 (final do dia): target = HOJE 23:50
+            #   - hora  < 12 (madrugada):    target = ONTEM 23:50
+            # report_date sempre referente ao target, para idempotencia
+            # estavel mesmo quando o envio cai apos a meia-noite.
+            if local_now.hour >= 12:
+                target_time = local_now.replace(hour=23, minute=50, second=0, microsecond=0)
+            else:
+                target_time = (local_now - timedelta(days=1)).replace(
+                    hour=23, minute=50, second=0, microsecond=0,
+                )
+            window_start = target_time - timedelta(minutes=30)
+            window_end = target_time + timedelta(minutes=20)
+            if local_now < window_start or local_now > window_end:
                 continue
 
+            report_date = target_time.date().isoformat()
+
             if report_type == "monthly":
-                last_day = monthrange(local_now.year, local_now.month)[1]
-                if local_now.day != last_day:
+                last_day = monthrange(target_time.year, target_time.month)[1]
+                if target_time.day != last_day:
                     continue
 
-            report_date = local_now.date().isoformat()
             registry_key = f"{pais}:{report_date}"
             if self._report_already_sent(report_type, pais, report_date, registry_key):
                 continue
@@ -191,11 +207,20 @@ class ReportService:
                     )
                 )
 
-                # 30-minute window after decision time (absorbs delay + cold start)
-                if local_now.hour != decision_hour or (local_now.minute - decision_minute) > 29 or local_now.minute < decision_minute:
+                # Janela ampla ancorada no horario de decisao (padrao 06:00):
+                # 30 min antes ate 30 min depois — cruza a fronteira de hora
+                # com seguranca (ex.: 05:40 ate 06:30). target_time sempre
+                # referente ao dia de HOJE local, pois a decisao de ativar
+                # energia solar e tomada a cada manha local.
+                target_time = local_now.replace(
+                    hour=decision_hour, minute=decision_minute, second=0, microsecond=0,
+                )
+                window_start = target_time - timedelta(minutes=30)
+                window_end = target_time + timedelta(minutes=30)
+                if local_now < window_start or local_now > window_end:
                     continue
 
-                report_date = local_now.date().isoformat()
+                report_date = target_time.date().isoformat()
                 country_key = f"PAIS:{pais.nome}"
                 fallback_key = f"solar:{country_key}:{report_date}"
                 if self._report_already_sent("solar", country_key, report_date, fallback_key):
