@@ -28,16 +28,21 @@ class ServidorService:
     def _notify(self, event_type, description, servidor, snapshot=None):
         if not servidor:
             return
-
-        self.notification_service.send_event_notification(
-            EventNotification(
-                event_type=event_type,
-                description=description,
-                servidor=servidor,
-                timestamp=self.notification_service.now_utc(),
-                snapshot=snapshot,
+        try:
+            self.notification_service.send_event_notification(
+                EventNotification(
+                    event_type=event_type,
+                    description=description,
+                    servidor=servidor,
+                    timestamp=self.notification_service.now_utc(),
+                    snapshot=snapshot,
+                )
             )
-        )
+        except Exception as exc:
+            import logging as _log
+            _log.getLogger(__name__).warning(
+                "Falha ao enviar notificacao de evento '%s': %s", event_type, exc
+            )
 
     def listar(self):
         return self.repo.listar_servidores()

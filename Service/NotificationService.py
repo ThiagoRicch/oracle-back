@@ -136,11 +136,15 @@ class NotificationService:
             message.add_alternative(html_body, subtype="html")
             self._attach_inline_logo(message)
 
-        with smtplib.SMTP(self.smtp_host, self.smtp_port, timeout=20) as smtp:
-            smtp.starttls()
-            if self.smtp_user and self.smtp_password:
-                smtp.login(self.smtp_user, self.smtp_password)
-            smtp.send_message(message)
+        try:
+            with smtplib.SMTP(self.smtp_host, self.smtp_port, timeout=20) as smtp:
+                smtp.starttls()
+                if self.smtp_user and self.smtp_password:
+                    smtp.login(self.smtp_user, self.smtp_password)
+                smtp.send_message(message)
+        except Exception as exc:
+            logger.error("Falha ao enviar email '%s': %s", subject, exc)
+            return False
 
         return True
 

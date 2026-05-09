@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from starlette.middleware import Middleware
 
 from Controller.AuthController import router as auth_router
@@ -55,7 +55,15 @@ async def force_cors(request: Request, call_next):
                 "Access-Control-Max-Age": "86400",
             },
         )
-    response = await call_next(request)
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        import logging as _log
+        _log.getLogger(__name__).error("Erro nao tratado na requisicao: %s", exc)
+        response = JSONResponse(
+            status_code=500,
+            content={"detail": "Internal server error"},
+        )
     response.headers["Access-Control-Allow-Origin"] = "*"
     return response
 
